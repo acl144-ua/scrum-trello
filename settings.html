@@ -116,6 +116,12 @@ new Vue({
   },
   async created () {
     this.config = JSON.parse(JSON.stringify(await loadConfig(t)));
+    // La primera vez que se abre Configurar se importan los datos del Power-Up
+    // anterior (si import-data.js existe). Se guarda una marca para no repetirlo.
+    if (this.importData && !(await t.get('board', 'shared', 'importado'))) {
+      await this.importOld();
+      await t.set('board', 'shared', 'importado', true);
+    }
   },
   methods: {
     capacity (sprint) {
