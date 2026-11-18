@@ -71,22 +71,22 @@
 
     <div id="summary">
       
-      <template v-if="board && group && board.hours && board.people">
+      <template v-if="config">
 
-        <div class="sprints" v-if="group">
-          <button v-for="(sprint, index) in group.sprints" :key="index" @click="selectSprint(index)" :class="{ 'mod-primary': index === selectedSprintIndex }">Sprint {{ index+1 }} <span>{{ sprintsStoryPoints[index] }} SP</span></button>
+        <div class="sprints">
+          <button v-for="(sprint, index) in config.sprints" :key="index" @click="selectSprint(index)" :class="{ 'mod-primary': index === selectedSprintIndex }">Sprint {{ index+1 }} <span>{{ sprintsStoryPoints[index] }} SP</span></button>
           <button @click="download()" v-if="chart">Descargar en PNG</button>
         </div>
   
         <canvas class="chart" height="250"></canvas>
 
-        <div class="total" v-if="group">
+        <div class="total">
           <span class="sp">Total:</span>
           <span class="sp">&nbsp;{{ sprintsStoryPoints[selectedSprintIndex] }} SP</span>
           <span class="spr">&nbsp;({{ sprintsStoryPointsReal[selectedSprintIndex] }} SP dedicados)</span>
         </div>
 
-        <div class="members" v-if="group">
+        <div class="members">
           <div class="member" v-for="member in members" :key="member.id">
             <span class="circle">
               <span class="initials">{{ member.initials }}</span>
@@ -99,7 +99,7 @@
         </div>
 
       </template>
-      <p class="message" v-else>Para poder ver el resumen hay que configurar previamente el tablero en la sección <strong>Configurar</strong></p>
+      <p class="message" v-else>Cargando...</p>
 
     </div>
 
@@ -107,7 +107,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.5.1/chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.5.16/dist/vue.min.js"></script>
-    <script src="./common.js?cache=3"></script>
+    <script src="./common.js?cache=4"></script>
     <script>
 
 /* global TrelloPowerUp */
@@ -117,8 +117,7 @@ new Vue({
   el: '#summary',
   data () {
     return {
-      board: null,
-      group: null,
+      config: null,
       selectedSprint: null,
       selectedSprintIndex: null,
       sprintsStoryPoints: [],
@@ -137,6 +136,7 @@ new Vue({
       const cardsData = await Promise.all(cards.map(card => t.get(card.id, 'shared')));
       this.cards = cardsData.map((cardData, index) => {
         return {
+          type: cardData.type,
           sp: cardData.sp ? Number(cardData.sp) : undefined,
           spr: cardData.spr ? Number(cardData.spr) : undefined,
           sprint: cardData.sprint ? Number(cardData.sprint) : undefined,
@@ -144,48 +144,42 @@ new Vue({
           members: cards[index].members,
         }
       });
-      const board = await t.get('board', 'shared');
-      this.board = {
-        group: board.group,
-        people: board.people,
-        hours: board.hours,
-      };
-      if (this.board.group) {
-        this.group = groupsMap[this.board.group];
-        this.sprintsStoryPoints = this.group.sprints.map(sprint => 0);
-        this.sprintsStoryPointsReal = this.group.sprints.map(sprint => 0);
-        for (const card of this.cards) {
-          if (card.sprint && card.sp && (card.type != 'epic' && card.type != 'topic')) {
-            this.sprintsStoryPoints[card.sprint - 1] += card.sp;
-            if (card.spr) {
-              this.sprintsStoryPointsReal[card.sprint - 1] += card.spr;
-            }
+      this.config = await loadConfig(t);
+      this.sprintsStoryPoints = this.config.sprints.map(sprint => 0);
+      this.sprintsStoryPointsReal = this.config.sprints.map(sprint => 0);
+      for (const card of this.cards) {
+        if (card.sprint && card.sp && (card.type != 'epic' && card.type != 'topic')
+            && card.sprint <= this.config.sprints.length) {
+          this.sprintsStoryPoints[card.sprint - 1] += card.sp;
+          if (card.spr) {
+            this.sprintsStoryPointsReal[card.sprint - 1] += card.spr;
           }
         }
       }
       setTimeout(this.selectCurrentSprint, 0);
     },
     selectSprint (index) {
-      this.selectedSprint = this.group.sprints[index];
+      this.selectedSprint = this.config.sprints[index];
       this.selectedSprintIndex = index;
       this.countMembersSP();
       this.drawChart();
     },
+    // Selecciona el sprint de hoy; si hoy no cae en ninguno, el último ya empezado
     selectCurrentSprint () {
-      let found = false;
       const today = moment().format('YYYY-MM-DD');
-      for (const [index, sprint] of this.group.sprints.entries()) {
-        const sprintFrom = moment(sprint.from, 'DD/MM/YYYY', true).format('YYYY-MM-DD');
-        const sprintTo = moment(sprint.to, 'DD/MM/YYYY', true).format('YYYY-MM-DD');
-        if (today >= sprintFrom && today < sprintTo) {
-          this.selectSprint(index);
-          found = true;
+      let selected = 0;
+      for (const [index, sprint] of this.config.sprints.entries()) {
+        const sprintFrom = moment(sprint.from, DATE_FORMAT, true).format('YYYY-MM-DD');
+        const sprintTo = moment(sprint.to, DATE_FORMAT, true).format('YYYY-MM-DD');
+        if (today >= sprintFrom && today <= sprintTo) {
+          selected = index;
           break;
         }
+        if (today > sprintTo) {
+          selected = index;
+        }
       }
-      if (!found) {
-        this.selectSprint(0);
-      }
+      this.selectSprint(selected);
     },
     countMembersSP () {
       const membersMap = {};
@@ -228,8 +222,15 @@ new Vue({
       let currentReal = total;
       const burndownReal = [];
       const today = moment().format('YYYY-MM-DD');
-      const dateFrom = moment(this.selectedSprint.from, 'DD/MM/YYYY').toDate();
-      const dateTo = moment(this.selectedSprint.to, 'DD/MM/YYYY').toDate();
+      const dateFrom = moment(this.selectedSprint.from, DATE_FORMAT).toDate();
+      const dateTo = moment(this.selectedSprint.to, DATE_FORMAT).toDate();
+      // Las tareas terminadas antes del inicio del sprint se descuentan el primer día
+      const firstDay = moment(dateFrom).format('YYYY-MM-DD');
+      for (const day of Object.keys(dayDone)) {
+        if (day < firstDay) {
+          dayDone[firstDay] = (dayDone[firstDay] || 0) + dayDone[day];
+        }
+      }
       for (var d = dateFrom; d <= dateTo; d.setDate(d.getDate() + 1)) {
         const dateParsed = moment(d).format('YYYY-MM-DD');
         if (dateParsed in dayDone) {
@@ -237,11 +238,11 @@ new Vue({
         }
         burndownReal.push({ x: dateParsed, y: dateParsed <= today ? currentReal : undefined });
       }
-      const sprintCapacity = this.selectedSprint.weeks * this.group.hoursPersonWeek * this.board.people / this.board.hours;
+      // La línea ideal baja desde los puntos comprometidos hasta 0
       const burndownIdeal = [];
       for (let i = 0; i < burndownReal.length; i++) {
         const dateParsed = burndownReal[i].x;
-        burndownIdeal.push({ x: dateParsed, y: sprintCapacity - i * sprintCapacity / (burndownReal.length - 1) });
+        burndownIdeal.push({ x: dateParsed, y: total - i * total / (burndownReal.length - 1) });
       }
       const chartElement = document.querySelector('canvas.chart');
       const ctx = chartElement.getContext('2d');

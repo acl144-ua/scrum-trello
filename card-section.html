@@ -59,14 +59,10 @@
           <button class="remove mod-danger" @click="removeStoryPoints()">Borrar</button>
         </div>
 
-        <div class="sprints" v-if="group">
+        <div class="sprints">
           <p>¿Para qué Sprint se ha comprometido el equipo a realizar esta tarea?</p>
-          <button v-for="(sprint, index) in group.sprints" :key="index" @click="setSprint(index+1)" :class="{ 'mod-primary': index+1 === card.sprint }">Sprint {{ index+1 }}</button>
+          <button v-for="(sprint, index) in sprints" :key="index" @click="setSprint(index+1)" :class="{ 'mod-primary': index+1 === card.sprint }">Sprint {{ index+1 }}</button>
           <button class="delete mod-danger" @click="removeSprint()">Borrar</button>
-        </div>
-        <div class="sprints" v-else=>
-          <p>¿Para qué Sprint se ha comprometido el equipo a realizar esta tarea?</p>
-          <p class="message">Para poder seleccionar el Sprint hay que configurar previamente el tablero en la sección <strong>Configurar</strong></p>
         </div>
 
         <div class="date">
@@ -111,7 +107,7 @@
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.5.16/dist/vue.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
-    <script src="./common.js?cache=3"></script>
+    <script src="./common.js?cache=4"></script>
     <script>
 
 /* global TrelloPowerUp */
@@ -122,7 +118,7 @@ new Vue({
   data () {
     return {
       card: null,
-      group: null,
+      sprints: [],
       sps: [1, 2, 3, 5, 8, 13, 21],
       cardDateError: false,
       cardDate: '',
@@ -143,10 +139,8 @@ new Vue({
         date: cardData.date,
         type: cardData.type,
       }
-      const boardData = await t.get('board', 'shared');
-      if (boardData.group) {
-        this.group = groupsMap[boardData.group];
-      }
+      const config = await loadConfig(t);
+      this.sprints = config.sprints;
     },
     async setSprint (sprint) {
       await t.set(this.card.id, 'shared', 'sprint', sprint);

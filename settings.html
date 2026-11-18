@@ -1,61 +1,94 @@
 <html>
   <head>
     <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://p.trellocdn.com/power-up.min.css">
     <style>
       div#settings {
         padding: 15px;
       }
-      div.groups p,
-      div.people p,
-      div.hours p,
-      div.info p {
-        margin: 0;
-      }
-      div.groups,
-      div.people,
-      div.hours {
+      div.field,
+      div.sprint {
         margin-bottom: 8px;
       }
-      div.info {
-        margin-top: 16px;
+      div.field label {
+        display: inline-block;
+        width: 260px;
       }
-      div.info span.sp {
+      div.field input,
+      div.sprint input {
+        display: inline-block;
+        width: 110px;
+        margin-right: 4px;
+      }
+      div.sprint span.name {
+        display: inline-block;
+        width: 70px;
         font-weight: bold;
+      }
+      div.sprint span.cap {
+        margin-left: 8px;
         color: #6EA952;
+        font-weight: bold;
+      }
+      p.error {
+        color: #EB5A46;
+        margin: 8px 0 0 0;
+      }
+      p.ok {
+        color: #6EA952;
+        margin: 8px 0 0 0;
+      }
+      div.actions,
+      div.import {
+        margin-top: 12px;
+      }
+      div.import {
+        padding-top: 8px;
+        border-top: 1px solid #dfe1e6;
       }
     </style>
   </head>
   <body>
 
-    <div id="settings" v-if="board">
+    <div id="settings" v-if="config">
 
       <h3>Configurar tablero</h3>
 
-      <div class="groups">
-        <p>¿Cuál es tu grupo?</p>
-        <button v-for="group in groupsEnabled" :key="group.id" @click="setGroup(group.id)" :class="{ 'mod-primary': group.id == board.group }">{{ group.name }}</button>
-        <button class="delete mod-danger" @click="removeGroup()">Borrar</button>
+      <div class="field">
+        <label>¿Cuántas personas sois en el equipo?</label>
+        <input type="number" min="1" v-model.number="config.people">
+      </div>
+      <div class="field">
+        <label>¿A cuántas horas equivale 1 story point?</label>
+        <input type="number" min="1" v-model.number="config.hours">
+      </div>
+      <div class="field">
+        <label>Horas por persona y semana</label>
+        <input type="number" min="1" v-model.number="config.hoursPerPersonWeek">
       </div>
 
-      <div class="people">
-        <p>¿Cuántas personas sois en el grupo?</p>
-        <button v-for="people in peopleList" :key="people" @click="setPeople(people)" :class="{ 'mod-primary': people == board.people }">{{ people }}</button>
-        <button class="delete mod-danger" @click="removePeople()">Borrar</button>
+      <h4>Sprints (fechas DD/MM/AAAA)</h4>
+      <div class="sprint" v-for="(sprint, index) in config.sprints" :key="index">
+        <span class="name">Sprint {{ index + 1 }}</span>
+        <input type="text" placeholder="DD/MM/AAAA" v-model="sprint.from">
+        <input type="text" placeholder="DD/MM/AAAA" v-model="sprint.to">
+        <span class="cap" v-if="capacity(sprint) !== null">{{ capacity(sprint) | fix }} SP</span>
+        <button class="mod-danger" @click="removeSprint(index)" v-if="config.sprints.length > 1">Quitar</button>
+      </div>
+      <button @click="addSprint()">Añadir sprint</button>
+
+      <p class="error" v-if="error">{{ error }}</p>
+      <p class="ok" v-if="saved">Configuración guardada</p>
+
+      <div class="actions">
+        <button class="mod-primary" @click="save()">Guardar</button>
+        <button @click="restore()">Valores por defecto</button>
       </div>
 
-      <div class="hours">
-        <p>¿A cuántas horas equivale un story point en vuestro equipo?</p>
-        <button v-for="hours in hoursList" :key="hours" @click="setHours(hours)" :class="{ 'mod-primary': hours == board.hours }">{{ hours }}</button>
-        <button class="delete mod-danger" @click="removeHours()">Borrar</button>
-      </div>
-
-      <div class="info" v-if="board.group && board.people && board.hours && group">
-        <h3>Tablero configurado con éxito</h3>
-        <ul>
-          <li>— El curso se divide en <strong>{{ group.sprints.length }}</strong> sprints</li>
-          <li v-for="(sprint, index) in group.sprints" :key="index+1" v-if="index > 0">— La capacidad del equipo para el <strong>Sprint {{ index }}</strong> es de <strong>{{ getSprintCapacitySP(sprint) | fix }} SP</strong> ({{ getSprintCapacityHours(sprint) }} horas)</li>
-          <li>— La capacidad <strong>total</strong> del equipo es de <strong>{{ getCapacitySP() | fix }} SP</strong> ({{ getCapacityHours() }} horas)</li>
-        </ul>
+      <div class="import" v-if="importData">
+        <p>Datos del Power-Up anterior: {{ importData.cards.length }} tarjetas (tipo, puntos, sprint y fecha de finalización).</p>
+        <button @click="importOld()">Importar datos del Scrum anterior</button>
+        <p class="ok" v-if="importMessage">{{ importMessage }}</p>
       </div>
 
     </div>
@@ -63,7 +96,8 @@
     <script src="https://p.trellocdn.com/power-up.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.5.16/dist/vue.min.js"></script>
-    <script src="./common.js?cache=3"></script>
+    <script src="./common.js?cache=4"></script>
+    <script src="./import-data.js?cache=4"></script>
     <script>
 
 /* global TrelloPowerUp */
@@ -73,65 +107,88 @@ new Vue({
   el: '#settings',
   data () {
     return {
-      groupsEnabled,
-      board: null,
-      group: null,
-      peopleList: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      hoursList: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      config: null,
+      error: '',
+      saved: false,
+      importData: typeof IMPORT_DATA !== 'undefined' ? IMPORT_DATA : null,
+      importMessage: '',
     }
   },
   async created () {
-    await this.initialize();
+    this.config = JSON.parse(JSON.stringify(await loadConfig(t)));
   },
   methods: {
-    async initialize () {
-      const board = await t.get('board', 'shared');
-      this.board = {
-        group: board.group,
-        people: board.people,
-        hours: board.hours,
-      };
-      if (this.board.group) {
-        this.group = groupsMap[this.board.group];
+    capacity (sprint) {
+      const from = moment(sprint.from, DATE_FORMAT, true);
+      const to = moment(sprint.to, DATE_FORMAT, true);
+      if (!from.isValid() || !to.isValid() || !this.config.hours) {
+        return null;
       }
+      return sprintCapacitySP(sprint, this.config);
     },
-    async setGroup (group) {
-      await t.set('board', 'shared', 'group', group);
-      this.board.group = await t.get('board', 'shared', 'group');
-      this.group = groupsMap[this.board.group];
+    addSprint () {
+      const last = this.config.sprints[this.config.sprints.length - 1];
+      const from = moment(last.to, DATE_FORMAT, true);
+      const start = from.isValid() ? from : moment();
+      this.config.sprints.push({
+        from: start.format(DATE_FORMAT),
+        to: start.clone().add(4, 'weeks').format(DATE_FORMAT),
+      });
     },
-    async removeGroup () {
-      await t.remove('board', 'shared', 'group');
-      this.board.group = await t.get('board', 'shared', 'group');
-      this.group = null;
+    removeSprint (index) {
+      this.config.sprints.splice(index, 1);
     },
-    async setPeople (people) {
-      await t.set('board', 'shared', 'people', people);
-      this.board.people = await t.get('board', 'shared', 'people');
+    validate () {
+      const c = this.config;
+      if (!(c.people > 0 && c.hours > 0 && c.hoursPerPersonWeek > 0)) {
+        return 'Personas, horas por story point y horas por persona y semana tienen que ser mayores que 0';
+      }
+      for (const [index, sprint] of c.sprints.entries()) {
+        const from = moment(sprint.from, DATE_FORMAT, true);
+        const to = moment(sprint.to, DATE_FORMAT, true);
+        if (!from.isValid() || !to.isValid()) {
+          return 'Las fechas del Sprint ' + (index + 1) + ' no son válidas (usa DD/MM/AAAA)';
+        }
+        if (!to.isAfter(from)) {
+          return 'En el Sprint ' + (index + 1) + ' la fecha de fin tiene que ser posterior a la de inicio';
+        }
+      }
+      return '';
     },
-    async removePeople () {
-      await t.remove('board', 'shared', 'people');
-      this.board.people = await t.get('board', 'shared', 'people');
+    async save () {
+      this.saved = false;
+      this.error = this.validate();
+      if (this.error) {
+        return;
+      }
+      await t.set('board', 'shared', {
+        people: this.config.people,
+        hours: this.config.hours,
+        hoursPerPersonWeek: this.config.hoursPerPersonWeek,
+        sprints: this.config.sprints.map(s => ({ from: s.from, to: s.to })),
+      });
+      this.saved = true;
     },
-    async setHours (hours) {
-      await t.set('board', 'shared', 'hours', hours);
-      this.board.hours = await t.get('board', 'shared', 'hours');
+    async restore () {
+      await t.remove('board', 'shared', ['people', 'hours', 'hoursPerPersonWeek', 'sprints']);
+      this.config = JSON.parse(JSON.stringify(await loadConfig(t)));
+      this.error = '';
+      this.saved = true;
     },
-    async removeHours () {
-      await t.remove('board', 'shared', 'hours');
-      this.board.hours = await t.get('board', 'shared', 'hours');
-    },
-    getSprintCapacitySP(sprint) {
-      return sprint.weeks * this.group.hoursPersonWeek * this.board.people / this.board.hours;
-    },
-    getSprintCapacityHours(sprint) {
-      return sprint.weeks * this.group.hoursPersonWeek * this.board.people;
-    },
-    getCapacitySP() {
-      return this.group.sprints.slice(1).reduce((acum, sprint) => acum + this.getSprintCapacitySP(sprint), 0);
-    },
-    getCapacityHours() {
-      return this.group.sprints.slice(1).reduce((acum, sprint) => acum + this.getSprintCapacityHours(sprint), 0);
+    async importOld () {
+      this.importMessage = 'Importando...';
+      let done = 0;
+      for (const card of this.importData.cards) {
+        const data = {};
+        for (const key of ['type', 'sp', 'sprint', 'date', 'spr']) {
+          if (card[key] !== undefined && card[key] !== '') {
+            data[key] = card[key];
+          }
+        }
+        await t.set(card.id, 'shared', data);
+        done++;
+      }
+      this.importMessage = 'Importadas ' + done + ' tarjetas';
     },
   },
   filters: {
